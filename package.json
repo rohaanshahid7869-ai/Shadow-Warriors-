@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "build": "node -e \"console.log('Static site ready')\"",
-    "lint": "node --check server.js && node --check public/js/physics3d.js && node --check public/js/character3d.js && node --check public/js/arena3d.js && node --check public/js/camera3d.js && node --check public/js/input3d.js && node --check public/js/combat3d.js && node --check public/js/game3d.js"
+    "build": "node scripts/build-docs.mjs",
+    "lint": "node --check server.js && node --check scripts/build-docs.mjs && node --check public/js/physics3d.js && node --check public/js/character3d.js && node --check public/js/arena3d.js && node --check public/js/camera3d.js && node --check public/js/input3d.js && node --check public/js/combat3d.js && node --check public/js/game3d.js"
   },
   "dependencies": {
     "express": "^5.3.0",
