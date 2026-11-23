@@ -68,16 +68,25 @@ function collectThreeDependencies() {
 fs.rmSync(docsDir, { recursive: true, force: true });
 ensureDir(docsDir);
 
-// 1. Copy public/ assets and rewrite root-relative paths to relative ./ paths for GitHub Pages subpath hosting
+// 1. Copy public/js assets
 copyDirRecursive(path.join(publicDir, 'js'), path.join(docsDir, 'js'));
 
-const indexHtml = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8')
+// 2. Write docs/index.html (for /docs or GitHub Actions Pages deployment)
+const rawHtml = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+const docsIndexHtml = rawHtml
   .replaceAll('"/vendor/three/', '"./vendor/three/')
   .replaceAll("'/js/", "'./js/")
   .replaceAll('"/js/', '"./js/');
-fs.writeFileSync(path.join(docsDir, 'index.html'), indexHtml, 'utf8');
+fs.writeFileSync(path.join(docsDir, 'index.html'), docsIndexHtml, 'utf8');
 
-// 2. Copy required Three.js ES module files (zero runtime dependency on node_modules or Express)
+// 3. Write root index.html (for default / root GitHub Pages deployment, overriding README.md)
+const rootIndexHtml = rawHtml
+  .replaceAll('"/vendor/three/', '"./docs/vendor/three/')
+  .replaceAll("'/js/", "'./docs/js/")
+  .replaceAll('"/js/', '"./docs/js/');
+fs.writeFileSync(path.join(rootDir, 'index.html'), rootIndexHtml, 'utf8');
+
+// 4. Copy required Three.js ES module files (zero runtime dependency on node_modules or Express)
 const threeFiles = collectThreeDependencies();
 for (const absFile of threeFiles) {
   const rel = path.relative(threeSrcDir, absFile);
@@ -86,7 +95,8 @@ for (const absFile of threeFiles) {
   fs.copyFileSync(absFile, destFile);
 }
 
-// 3. Disable Jekyll processing on GitHub Pages
+// 5. Disable Jekyll processing on GitHub Pages in both root and docs/
 fs.writeFileSync(path.join(docsDir, '.nojekyll'), '', 'utf8');
+fs.writeFileSync(path.join(rootDir, '.nojekyll'), '', 'utf8');
 
-console.log(`Built static GitHub Pages site in docs/ (${threeFiles.length} Three.js module files bundled).`);
+console.log(`Built static GitHub Pages site in docs/ and root index.html (${threeFiles.length} Three.js module files bundled).`);

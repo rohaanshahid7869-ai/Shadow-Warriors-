@@ -679,10 +679,20 @@ window.SW3D = {
   setFog: (enabled) => engine.setFog(Boolean(enabled)),
 };
 
-// Apply persisted brightness/fog and boot live 3D warrior showcase immediately
+// Apply persisted brightness/fog and boot live 3D showcase (or active match if already started)
 engine.setBrightness(S.br);
 engine.setFog(Boolean(S.fog));
-const initialChar = C.find((c) => c.id === S.ch) || C[0];
-engine.setMenuShowcase(initialChar, S.ar);
+if (G && !G.over) {
+  engine.startMatch({
+    playerChar: G.a.ch,
+    opponentChar: G.b.ch,
+    arenaIdx: G.ar,
+    training: G.tr,
+    diffIdx: S.diff,
+  });
+} else {
+  const initialChar = C.find((c) => c.id === S.ch) || C[0];
+  engine.setMenuShowcase(initialChar, S.ar);
+}
 </script>
 </body></html>
