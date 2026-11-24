@@ -330,23 +330,26 @@ export class CombatSystem3D {
         if (dist < 4.5) {
           ac.action = 'hurt';
           ac.actionTimer = 0.55;
-          attacker.vel.x = -(attacker.pos.x - victim.pos.x) / dist * 10;
-          attacker.vel.z = -(attacker.pos.z - victim.pos.z) / dist * 10;
+          const pDirX = dist > 0.05 ? -(attacker.pos.x - victim.pos.x) / dist : Math.sin(victim.yaw);
+          const pDirZ = dist > 0.05 ? -(attacker.pos.z - victim.pos.z) / dist : Math.cos(victim.yaw);
+          attacker.vel.x = pDirX * 10;
+          attacker.vel.z = pDirZ * 10;
         }
         vc.en = Math.min(100, vc.en + 14);
         this.spawnImpactRing(victim.pos.x, victim.pos.y + 1.0, victim.pos.z, '#ffffff', 3.4, 0.35);
         this.hooks.onCameraShake?.(0.42, 0.22, 2.0);
         this.hooks.onToast?.('PERFECT PARRY!');
+        dmg = 0;
       } else {
         vc.en = Math.min(100, vc.en + 4);
+        dmg *= 0.14;
       }
-      dmg *= 0.14;
     } else {
       vc.action = 'hurt';
       vc.actionTimer = 0.32;
       vc.wasFrozen = false;
-      const kbDirX = (victim.pos.x - attacker.pos.x) / dist;
-      const kbDirZ = (victim.pos.z - attacker.pos.z) / dist;
+      const kbDirX = dist > 0.05 ? (victim.pos.x - attacker.pos.x) / dist : -Math.sin(victim.yaw);
+      const kbDirZ = dist > 0.05 ? (victim.pos.z - attacker.pos.z) / dist : -Math.cos(victim.yaw);
       victim.vel.x = kbDirX * knockback;
       victim.vel.z = kbDirZ * knockback;
       if (!victim.grounded) victim.vel.y = Math.max(victim.vel.y, 4.5);

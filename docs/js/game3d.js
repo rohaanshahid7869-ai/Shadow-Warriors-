@@ -42,6 +42,45 @@ function detectSoftwareWebGL() {
   }
 }
 
+function detectMobileDevice() {
+  try {
+    const coarse =
+      window.matchMedia?.('(pointer:coarse)').matches ||
+      window.matchMedia?.('(any-pointer:coarse)').matches;
+    const uaMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+    const smallTouch = (navigator.maxTouchPoints || 0) > 0 && window.innerWidth <= 1024;
+    return Boolean(coarse || uaMobile || smallTouch);
+  } catch (_) {
+    return false;
+  }
+}
+
+function canRenderHalfFloat(renderer) {
+  try {
+    const gl = renderer.getContext();
+    if (!gl) return false;
+    const isWebGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+    const hasExt = isWebGL2
+      ? Boolean(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'))
+      : Boolean(gl.getExtension('EXT_color_buffer_half_float') || gl.getExtension('OES_texture_half_float'));
+    if (!hasExt) return false;
+
+    const rt = new THREE.WebGLRenderTarget(4, 4, {
+      type: THREE.HalfFloatType,
+      depthBuffer: false,
+      stencilBuffer: false,
+    });
+    renderer.setRenderTarget(rt);
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    renderer.setRenderTarget(null);
+    rt.dispose();
+    return status === gl.FRAMEBUFFER_COMPLETE;
+  } catch (_) {
+    try { renderer.setRenderTarget(null); } catch (__) {}
+    return false;
+  }
+}
+
 class DustPool {
   constructor(scene) {
     this.count = 28;
@@ -120,32 +159,48 @@ export class ShadowWarriors3DEngine {
     this.mountEl = mountEl;
     this.hooks = hooks || {};
     this.isSoftwareGl = detectSoftwareWebGL();
+    this.isMobile = detectMobileDevice();
+    this.targetLock = this.isMobile;
+
+    const initW = Math.max(1, this.mountEl.clientWidth || window.innerWidth);
+    const initH = Math.max(1, this.mountEl.clientHeight || window.innerHeight);
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(54, window.innerWidth / window.innerHeight, 0.1, 240);
+    this.camera = new THREE.PerspectiveCamera(54, initW / initH, 0.1, 240);
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: !this.isSoftwareGl,
       powerPreference: 'high-performance',
     });
     this.baseExposure = 0.84;
+    this.renderer.setClearColor(0x090b12, 1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = this.baseExposure;
-    this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    const dpr = this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, this.isMobile ? 1.5 : 2);
+    this.renderer.setPixelRatio(dpr);
+    this.renderer.setSize(initW, initH);
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
     mountEl.appendChild(this.renderer.domElement);
 
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environment = this.envTexture;
-    this.scene.environmentIntensity = 0.35;
-    pmrem.dispose();
+    const halfFloatOk = canRenderHalfFloat(this.renderer);
+
+    this.envTexture = null;
+    if (halfFloatOk) {
+      try {
+        const pmrem = new THREE.PMREMGenerator(this.renderer);
+        this.envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+        this.scene.environment = this.envTexture;
+        this.scene.environmentIntensity = 0.35;
+        pmrem.dispose();
+      } catch (_) {
+        this.envTexture = null;
+      }
+    }
 
     this.cameraCtrl = new ThirdPersonCamera(this.camera);
     this.input = new InputController(
@@ -159,19 +214,23 @@ export class ShadowWarriors3DEngine {
     this.bloomBoost = 0;
     this.composer = null;
     this.bloomPass = null;
-    if (!this.isSoftwareGl) {
-      const w = Math.max(1, window.innerWidth);
-      const h = Math.max(1, window.innerHeight);
-      this.composer = new EffectComposer(this.renderer);
-      this.composer.addPass(new RenderPass(this.scene, this.camera));
-      this.bloomPass = new UnrealBloomPass(
-        new THREE.Vector2(w, h),
-        this.baseBloomStrength,
-        0.56,
-        0.92
-      );
-      this.composer.addPass(this.bloomPass);
-      this.composer.addPass(new OutputPass());
+    if (!this.isSoftwareGl && halfFloatOk) {
+      try {
+        this.composer = new EffectComposer(this.renderer);
+        this.composer.setPixelRatio(this.isMobile ? 1 : dpr);
+        this.composer.setSize(initW, initH);
+        this.composer.addPass(new RenderPass(this.scene, this.camera));
+        this.bloomPass = new UnrealBloomPass(
+          new THREE.Vector2(initW, initH),
+          this.baseBloomStrength,
+          0.56,
+          0.92
+        );
+        this.composer.addPass(this.bloomPass);
+        this.composer.addPass(new OutputPass());
+      } catch (_) {
+        this._disableComposer();
+      }
     }
 
     this.dust = new DustPool(this.scene);
@@ -205,18 +264,51 @@ export class ShadowWarriors3DEngine {
     this.training = false;
     this.diffIdx = 1;
 
-    this.clock = new THREE.Clock();
+    this.timer = new THREE.Timer();
+    this.timer.connect(document);
     this.elapsed = 0;
     this.frameId = 0;
     this._stepAccum = 0;
     this._hudSyncTimer = 0;
 
     this._onResize = this._onResize.bind(this);
+    this._onOrientationChange = () => setTimeout(this._onResize, 120);
     this._onContextLost = this._onContextLost.bind(this);
     this._onContextRestored = this._onContextRestored.bind(this);
     window.addEventListener('resize', this._onResize);
+    window.addEventListener('orientationchange', this._onOrientationChange);
+    window.visualViewport?.addEventListener('resize', this._onResize);
     this.renderer.domElement.addEventListener('webglcontextlost', this._onContextLost, false);
     this.renderer.domElement.addEventListener('webglcontextrestored', this._onContextRestored, false);
+  }
+
+  _disableComposer() {
+    try { this.bloomPass?.dispose?.(); } catch (_) {}
+    try { this.composer?.dispose?.(); } catch (_) {}
+    this.bloomPass = null;
+    this.composer = null;
+  }
+
+  _renderFrame() {
+    if (this.composer) {
+      try {
+        this.composer.render();
+        return;
+      } catch (_) {
+        this._disableComposer();
+      }
+    }
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  setTargetLock(enabled = true) {
+    this.targetLock = Boolean(enabled);
+    return this.targetLock;
+  }
+
+  toggleTargetLock() {
+    this.targetLock = !this.targetLock;
+    return this.targetLock;
   }
 
   setBrightness(pct = 100) {
@@ -236,28 +328,31 @@ export class ShadowWarriors3DEngine {
 
   _onContextRestored() {
     if (this.running) {
-      this.clock.start();
-      this.clock.getDelta();
+      this.stopLoopOnly();
+      this.timer.reset();
       this._tick();
     }
   }
 
   _onResize() {
-    const w = Math.max(1, window.innerWidth);
-    const h = Math.max(1, window.innerHeight);
-    const dpr = this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, this.mountEl?.clientWidth || window.innerWidth);
+    const h = Math.max(1, this.mountEl?.clientHeight || window.innerHeight);
+    const dpr = this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, this.isMobile ? 1.5 : 2);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(w, h);
     if (this.composer) {
-      this.composer.setPixelRatio(dpr);
-      this.composer.setSize(w, h);
-      this.bloomPass?.resolution.set(w, h);
+      try {
+        this.composer.setPixelRatio(this.isMobile ? 1 : dpr);
+        this.composer.setSize(w, h);
+        this.bloomPass?.resolution.set(w, h);
+      } catch (_) {
+        this._disableComposer();
+      }
     }
     if (!this.running) {
-      if (this.composer) this.composer.render();
-      else this.renderer.render(this.scene, this.camera);
+      this._renderFrame();
     }
   }
 
@@ -288,7 +383,7 @@ export class ShadowWarriors3DEngine {
       this.arena = null;
     }
     this.arenaIdx = arenaIdx;
-    this.arena = buildArena3D(arenaIdx, this.scene, this.renderer, this.isSoftwareGl, this.fogEnabled);
+    this.arena = buildArena3D(arenaIdx, this.scene, this.renderer, this.isSoftwareGl, this.fogEnabled, this.isMobile);
   }
 
   setMenuShowcase(playerChar, arenaIdx) {
@@ -317,9 +412,9 @@ export class ShadowWarriors3DEngine {
     this.camera.updateProjectionMatrix();
 
     if (!this.running) {
+      this.stopLoopOnly();
       this.running = true;
-      this.clock.start();
-      this.clock.getDelta();
+      this.timer.reset();
       this._tick();
     }
   }
@@ -378,13 +473,14 @@ export class ShadowWarriors3DEngine {
     this.cameraCtrl.reset(Math.PI, this.playerBody.pos);
     this.input.setActive(true);
 
-    if (!this.isSoftwareGl) {
+    if (!this.isSoftwareGl && !this.isMobile) {
       this.renderer.compile(this.scene, this.camera);
     }
 
+    this.running = false;
+    this._onResize();
     this.running = true;
-    this.clock.start();
-    this.clock.getDelta();
+    this.timer.reset();
     this._tick();
   }
 
@@ -455,31 +551,36 @@ export class ShadowWarriors3DEngine {
 
   _tick = () => {
     if (!this.running) return;
-    const rawDt = this.clock.getDelta();
-    const dt = Math.min(0.05, Math.max(0.001, rawDt));
-    this.elapsed += dt;
+    try {
+      this.timer.update();
+      const rawDt = this.timer.getDelta();
+      const dt = Math.min(0.05, Math.max(0.001, rawDt));
+      this.elapsed += dt;
 
-    if (this.mode === 'showcase') {
-      this._stepShowcase(dt);
-    } else {
-      this._stepMatch(dt);
+      if (this.mode === 'showcase') {
+        this._stepShowcase(dt);
+      } else {
+        this._stepMatch(dt);
+      }
+
+      if (this.bloomBoost > 0.001) {
+        this.bloomBoost = THREE.MathUtils.damp(this.bloomBoost, 0, 8, dt);
+      } else {
+        this.bloomBoost = 0;
+      }
+      if (this.bloomPass) {
+        this.bloomPass.strength = this.baseBloomStrength + this.bloomBoost;
+      }
+
+      this._renderFrame();
+    } catch (err) {
+      if (!this._loggedTickErr) {
+        this._loggedTickErr = true;
+        console.error(err);
+      }
     }
 
-    if (this.bloomBoost > 0.001) {
-      this.bloomBoost = THREE.MathUtils.damp(this.bloomBoost, 0, 8, dt);
-    } else {
-      this.bloomBoost = 0;
-    }
-    if (this.bloomPass) {
-      this.bloomPass.strength = this.baseBloomStrength + this.bloomBoost;
-    }
-
-    if (this.composer) {
-      this.composer.render();
-    } else {
-      this.renderer.render(this.scene, this.camera);
-    }
-
+    if (!this.running) return;
     if (this.isSoftwareGl) {
       this._afterDraw(this._tick);
     } else {
@@ -490,7 +591,8 @@ export class ShadowWarriors3DEngine {
   _stepShowcase(dt) {
     if (this.arena) this.arena.update(dt, this.elapsed);
 
-    const narrow = window.innerWidth < 760;
+    const w = this.mountEl?.clientWidth || window.innerWidth;
+    const narrow = w < 760;
     const ang = 0.45 + Math.sin(this.elapsed * 0.28) * 0.35;
     const dist = narrow ? 5.2 : 4.6;
     const lookX = narrow ? 0 : -0.75;
@@ -526,10 +628,14 @@ export class ShadowWarriors3DEngine {
   _stepMatch(dt) {
     this.input.consumeFrameInput(_frameInput);
     this.cameraCtrl.applyInput(_frameInput.camDeltaX, _frameInput.camDeltaY, _frameInput.zoomDelta);
-    this.cameraCtrl.getMoveWorldXZ(_frameInput.moveX, _frameInput.moveY, _moveWorld);
 
     const pb = this.playerBody;
     const ob = this.opponentBody;
+    if (this.targetLock && !this.matchOver && !this.input.isCameraPaused()) {
+      this.cameraCtrl.applyTargetAssist(pb.pos, ob.pos, dt, 3.4);
+    }
+    this.cameraCtrl.getMoveWorldXZ(_frameInput.moveX, _frameInput.moveY, _moveWorld);
+
     const physics = this.arena.physics;
     const S = this.hooks.getSettings?.() || {};
 
@@ -610,8 +716,10 @@ export class ShadowWarriors3DEngine {
       if (!this.training && (pb.combat.hp <= 0 || ob.combat.hp <= 0 || this.matchTime <= 0)) {
         this.matchOver = true;
         this.input.setActive(false);
-        const won = pb.combat.hp > ob.combat.hp;
         const ko = ob.combat.hp <= 0;
+        const pPct = pb.combat.hp / Math.max(1, pb.combat.mhp);
+        const oPct = ob.combat.hp / Math.max(1, ob.combat.mhp);
+        const won = pb.combat.hp > 0 && (ko || pPct > oPct);
         this.hooks.onMatchEnd?.({
           won,
           ko,
@@ -710,10 +818,12 @@ export class ShadowWarriors3DEngine {
     this.combat.dispose();
     this.dust.dispose();
     window.removeEventListener('resize', this._onResize);
+    window.removeEventListener('orientationchange', this._onOrientationChange);
+    window.visualViewport?.removeEventListener('resize', this._onResize);
     this.renderer.domElement.removeEventListener('webglcontextlost', this._onContextLost);
     this.renderer.domElement.removeEventListener('webglcontextrestored', this._onContextRestored);
-    this.bloomPass?.dispose?.();
-    this.composer?.dispose?.();
+    this._disableComposer();
+    this.timer?.dispose?.();
     this.envTexture?.dispose?.();
     this.renderer.dispose();
   }

@@ -575,7 +575,7 @@ function makeHoloPylon(accentColor) {
   return { group: g, animatedRing: ring };
 }
 
-export function buildArena3D(arenaIdx, scene, renderer, isSoftwareGl, fogEnabled = true) {
+export function buildArena3D(arenaIdx, scene, renderer, isSoftwareGl, fogEnabled = true, isMobile = false) {
   const theme = ARENA_THEMES[arenaIdx] || ARENA_THEMES[0];
   const group = new THREE.Group();
   const physics = new PhysicsWorld(26);
@@ -597,8 +597,9 @@ export function buildArena3D(arenaIdx, scene, renderer, isSoftwareGl, fogEnabled
   const keyLight = new THREE.DirectionalLight(theme.sunColor, theme.sunIntensity);
   keyLight.position.set(22, 34, 18);
   keyLight.castShadow = !isSoftwareGl;
-  keyLight.shadow.mapSize.width = 2048;
-  keyLight.shadow.mapSize.height = 2048;
+  const shadowSize = isMobile ? 1024 : 2048;
+  keyLight.shadow.mapSize.width = shadowSize;
+  keyLight.shadow.mapSize.height = shadowSize;
   keyLight.shadow.camera.near = 2;
   keyLight.shadow.camera.far = 90;
   const d = 28;
@@ -621,7 +622,9 @@ export function buildArena3D(arenaIdx, scene, renderer, isSoftwareGl, fogEnabled
   }
 
   // Extended Ground Plane (140 radius) with procedural albedo + normal + roughness maps
-  const maxAniso = renderer.capabilities.getMaxAnisotropy();
+  const maxAniso = isMobile
+    ? Math.min(4, renderer.capabilities.getMaxAnisotropy())
+    : renderer.capabilities.getMaxAnisotropy();
   const pbrGround = createGroundPBRTextures(theme, arenaIdx, maxAniso);
   const stoneBump = createStoneBumpTexture();
 
@@ -891,6 +894,12 @@ export function buildArena3D(arenaIdx, scene, renderer, isSoftwareGl, fogEnabled
       const mats = new Set();
       const texs = new Set();
       group.traverse((o) => {
+        if (o.isLight && o.shadow && o.shadow.map) {
+          o.shadow.map.dispose();
+        }
+        if (o.isInstancedMesh && typeof o.dispose === 'function') {
+          o.dispose();
+        }
         if (o.geometry && !geos.has(o.geometry)) {
           geos.add(o.geometry);
           o.geometry.dispose();

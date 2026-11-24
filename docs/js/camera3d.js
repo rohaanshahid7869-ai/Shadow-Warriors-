@@ -80,6 +80,17 @@ export class ThirdPersonCamera {
     }
   }
 
+  applyTargetAssist(playerPos, oppPos, dt, strength = 3.2) {
+    const dx = oppPos.x - playerPos.x;
+    const dz = oppPos.z - playerPos.z;
+    if (dx * dx + dz * dz < 0.04) return;
+    const desiredYaw = Math.atan2(dx, dz);
+    const diff = Math.atan2(Math.sin(desiredYaw - this.yaw), Math.cos(desiredYaw - this.yaw));
+    const step = 1 - Math.exp(-strength * dt);
+    this.yaw = Math.atan2(Math.sin(this.yaw + diff * step), Math.cos(this.yaw + diff * step));
+    this.pitch = THREE.MathUtils.damp(this.pitch, 0.30, 2.2, dt);
+  }
+
   getMoveWorldXZ(moveX, moveY, outVec) {
     const fwdX = Math.sin(this.yaw);
     const fwdZ = Math.cos(this.yaw);

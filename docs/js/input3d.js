@@ -22,6 +22,8 @@ export class InputController {
     this._camTouchId = null;
     this._lastTouchX = 0;
     this._lastTouchY = 0;
+    this._camPauseUntil = 0;
+    this._lastTouchAt = 0;
 
     this._prevHeld = Object.create(null);
     this._queued = Object.create(null);
@@ -120,6 +122,11 @@ export class InputController {
     this.zoomDelta = 0;
     this._dragging = false;
     this._camTouchId = null;
+    this._camPauseUntil = 0;
+  }
+
+  isCameraPaused() {
+    return this._camTouchId !== null || this._dragging || performance.now() < this._camPauseUntil;
   }
 
   requestPointerLock() {
@@ -178,6 +185,7 @@ export class InputController {
 
   _onMouseDown(e) {
     if (!this.active) return;
+    if (performance.now() - this._lastTouchAt < 800) return;
     if (e.button === 0 || e.button === 2) {
       this._dragging = true;
       this._lastMouseX = e.clientX;
@@ -194,6 +202,7 @@ export class InputController {
 
   _onMouseMove(e) {
     if (!this.active) return;
+    if (!this.pointerLocked && performance.now() - this._lastTouchAt < 800) return;
     if (this.pointerLocked) {
       this.camDeltaX += e.movementX || 0;
       this.camDeltaY += e.movementY || 0;
@@ -215,35 +224,45 @@ export class InputController {
 
   _onTouchStart(e) {
     if (!this.active) return;
+    e.preventDefault();
+    this._lastTouchAt = performance.now();
     for (let i = 0; i < e.changedTouches.length; i++) {
       const t = e.changedTouches[i];
       if (this._camTouchId === null) {
         this._camTouchId = t.identifier;
         this._lastTouchX = t.clientX;
         this._lastTouchY = t.clientY;
+        this._camPauseUntil = performance.now() + 900;
       }
     }
   }
 
   _onTouchMove(e) {
     if (!this.active || this._camTouchId === null) return;
+    this._lastTouchAt = performance.now();
     for (let i = 0; i < e.changedTouches.length; i++) {
       const t = e.changedTouches[i];
       if (t.identifier === this._camTouchId) {
         e.preventDefault();
-        this.camDeltaX += (t.clientX - this._lastTouchX) * 1.4;
-        this.camDeltaY += (t.clientY - this._lastTouchY) * 1.4;
+        this.camDeltaX += (t.clientX - this._lastTouchX) * 1.45;
+        this.camDeltaY += (t.clientY - this._lastTouchY) * 1.45;
         this._lastTouchX = t.clientX;
         this._lastTouchY = t.clientY;
+        this._camPauseUntil = performance.now() + 900;
       }
     }
   }
 
   _onTouchEnd(e) {
+    this._lastTouchAt = performance.now();
     for (let i = 0; i < e.changedTouches.length; i++) {
       if (e.changedTouches[i].identifier === this._camTouchId) {
         this._camTouchId = null;
+        this._camPauseUntil = performance.now() + 900;
       }
+    }
+    if (e.touches && e.touches.length === 0) {
+      this._camTouchId = null;
     }
   }
 
